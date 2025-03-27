@@ -1,12 +1,12 @@
-import pandas as pd
-from typing import Dict, List, Any, Union
 from datetime import datetime
-from pprint import pprint
 from io import StringIO
+from typing import List
+
 import altair as alt
- 
+import pandas as pd
+
+
 def get_table(file):
-    content = ''
     with open(file, "r") as file:
         content = file.read()
     content = content.split('Per-Stroke Data:\n')[1]
@@ -14,9 +14,9 @@ def get_table(file):
     return content
  
 def split_frames(df):
-    '''
+    """
     Add a 'direction' column to the dataframe indicating whether the boat is going 'up', 'down', or 'turning'.
-    '''
+    """
     is_up = True
     pending_transition = True
     elements_since_transition = 0
