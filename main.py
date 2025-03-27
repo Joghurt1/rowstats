@@ -1,32 +1,83 @@
+import logging
+import os
 from datetime import datetime
 from io import StringIO
 from typing import List
 
 import altair as alt
-import pandas as pd
 import numpy as np
-import os
+import pandas as pd
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
 
 
-def get_table(file):
-    with open(file, "r") as file:
-        content = file.read()
-    content = content.split('Per-Stroke Data:\n')[1]
-    content = pd.read_csv(StringIO(content))
-    return content
- 
-def split_frames(df):
+def get_table(file_path: str) -> pd.DataFrame:
     """
-    Add a 'direction' column to the dataframe indicating whether the boat is going 'up', 'down', or 'turning'.
+    Reads the provided CSV file and returns a DataFrame containing the table after the
+    'Per-Stroke Data:' header line.
+
+    Args:
+        file_path: Path to the CSV file.
+
+    Returns:
+        A pandas DataFrame with the parsed data.
+
+    Raises:
+        ValueError: If the expected header is not found.
     """
+    logging.info(f"Reading file {file_path}")
+    try:
+        with open(file_path, "r") as f:
+            content = f.read()
+        # Ensure the split text is present
+        marker = 'Per-Stroke Data:\n'
+        if marker not in content:
+            raise ValueError(f"Expected marker '{marker}' not found in {file_path}")
+        # Read the portion after the marker into a DataFrame
+        csv_content = content.split(marker, 1)[1]
+        df = pd.read_csv(StringIO(csv_content))
+
+        # Remove data that is never read
+        df = df.drop(columns=['Power','Catch','Slip','Finish','Wash','Work', "Distance (IMP)", "Split (IMP)", "Speed (IMP)", "Distance/Stroke (IMP)", "Heart Rate", "Force Avg", "Force Max", "Max Force Angle", "GPS Lat.", "GPS Lon."])
+
+        return df
+    except Exception as e:
+        logging.error(f"Error processing file {file_path}: {e}")
+        raise
+
+
+def split_frames(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Processes the DataFrame by adding a 'dir' column to indicate the boat's movement direction
+    ('up', 'down', or 'turning'). Rows marked as 'turning' are removed, and numeric columns are
+    cleaned based on specific criteria.
+
+    Args:
+        df: DataFrame containing raw stroke data.
+
+    Returns:
+        A cleaned DataFrame with a new 'dir' column and numeric conversions.
+    """
+    logging.info(f"Splitting dataframes with {df.shape[0]} rows")
+
+    directions = []
     is_up = True
     pending_transition = True
     elements_since_transition = 0
- 
-    # Process each row
-    for i, row in df.iterrows():
-        split_time = datetime.strptime(row['Split (GPS)'], '%H:%M:%S.%f')
- 
+
+    # Process each row and determine direction based on the 'Split (GPS)' time
+    for idx, row in df.iterrows():
+        try:
+            split_time = datetime.strptime(row['Split (GPS)'], '%H:%M:%S.%f')
+        except (ValueError, KeyError) as e:
+            logging.error(f"Row {idx}: Invalid or missing 'Split (GPS)' value: {row.get('Split (GPS)', None)}")
+            directions.append('turning')
+            continue
+
         if split_time.minute > 12 and not pending_transition:
             pending_transition = True
         elif split_time.minute <= 12 and pending_transition:
@@ -34,85 +85,132 @@ def split_frames(df):
                 is_up = not is_up
             elements_since_transition = 0
             pending_transition = False
+
         if pending_transition:
-            df.at[i, 'dir'] = 'turning'
+            directions.append('turning')
         else:
             elements_since_transition += 1
-            df.at[i, 'dir'] = 'up' if is_up else 'down'
+            directions.append('up' if is_up else 'down')
 
-    # remove turning columns
-    df = df[df['dir'] != 'turning']
+    df = df.copy()
+    df['dir'] = directions
+    # Filter out rows where direction is 'turning'
+    df = df[df['dir'] != 'turning'].copy()
 
-    # insert nan where distance gap is to big
-    pd.options.mode.copy_on_write = True
-    df['Distance (GPS)'] = pd.to_numeric(df['Distance (GPS)'])
-    df['Stroke Rate'] = pd.to_numeric(df['Stroke Rate'])
+    # Convert columns to numeric, coercing errors to NaN
+    df['Distance (GPS)'] = pd.to_numeric(df['Distance (GPS)'], errors='coerce')
+    df['Stroke Rate'] = pd.to_numeric(df['Stroke Rate'], errors='coerce')
+
+    # Insert NaN where gaps are too large or stroke rates are out of acceptable bounds
     df.loc[df['Distance (GPS)'].diff() > 100, ['Distance (GPS)', 'Stroke Rate']] = np.nan
-    df.loc[df['Stroke Rate'] < 10 , ['Distance (GPS)', 'Stroke Rate']] = np.nan
-    df.loc[df['Stroke Rate'] > 34 , ['Distance (GPS)', 'Stroke Rate']] = np.nan
+    df.loc[df['Stroke Rate'] < 10, ['Distance (GPS)', 'Stroke Rate']] = np.nan
+    df.loc[df['Stroke Rate'] > 34, ['Distance (GPS)', 'Stroke Rate']] = np.nan
+
     return df
 
-def create_joined_dataset(file_names: List[str]) -> pd.DataFrame:
-    results = []
-    for file in file_names:
-        parsed_data = get_table(file)
-        parsed_data = parsed_data[1:]
-        parsed_data = split_frames(parsed_data)
-        # set 'file_name' column
-        parsed_data['file_name'] = file
-        results.append(parsed_data)
-    return pd.concat(results, ignore_index=True)
 
-def draw(data):
+def create_joined_dataset(file_names: List[str]) -> pd.DataFrame:
+    """
+    Reads multiple CSV files, processes each using the get_table and split_frames functions, and
+    concatenates them into a single DataFrame. A 'file_name' column is added to track the source.
+
+    Args:
+        file_names: List of CSV file paths.
+
+    Returns:
+        A concatenated pandas DataFrame of all processed files.
+    """
+    logging.info(f"Processing {len(file_names)} files:")
+    datasets = []
+    for file_path in file_names:
+        try:
+            parsed_data = get_table(file_path)
+            # Remove header row if needed (assuming first row is unwanted)
+            parsed_data = parsed_data.iloc[1:].copy()
+            parsed_data = split_frames(parsed_data)
+            parsed_data['file_name'] = os.path.basename(file_path)
+            datasets.append(parsed_data)
+        except Exception as e:
+            logging.error(f"Skipping file {file_path} due to error: {e}")
+
+    if not datasets:
+        raise ValueError("No valid datasets were created from the provided files.")
+    
+    logging.info(f"Successfully created unified dataset from {len(datasets)} files")
+    return pd.concat(datasets, ignore_index=True)
+
+
+def draw(data: pd.DataFrame) -> None:
+    """
+    Generates and saves an interactive Altair visualization with two components:
+      - A faceted line chart showing stroke rate vs. GPS distance by boat direction.
+      - A bar chart summarizing the maximum GPS distance per file.
+
+    Args:
+        data: DataFrame containing the processed stroke data.
+    """
     alt.renderers.enable("html")
 
-    # draw 2 lines allow toggling depending on 'dir' parameter and limit the size
+    # Selection for interactive toggling by file_name
     multi = alt.selection_point(fields=['file_name'])
-    chart = alt.Chart(data).mark_line(
-        strokeWidth=2
-    ).add_params(
-        multi
-    ).encode(
-        x=alt.X('Distance (GPS)', title='Distance (m)', scale=alt.Scale(domain=[0, 14000]), axis=alt.Axis(labelAngle=-45)),
-        y=alt.Y('Stroke Rate', title='Stroke Rate (spm)', scale=alt.Scale(domain=[10, 35])), # alt.Y('Split (GPS)', title='Split (GPS)'),
-        tooltip=alt.Tooltip('Stroke Rate', title='Stroke Rate (spm)'),
-        # set the color based on the 'file_name' column, allowing selection
-        color=alt.condition(multi, 'file_name:N', alt.value('lightgray')),
-        detail='group:N'
-    ).properties(
-        width=1200,
-        height=250,
-    ).facet(
-        row='dir:N'  # Creates separate charts for 'up' and 'down'
+
+    # Faceted line chart
+    line_chart = (
+        alt.Chart(data)
+        .mark_line(strokeWidth=2)
+        .add_params(multi)
+        .encode(
+            x=alt.X('Distance (GPS):Q', title='Distance (m)', scale=alt.Scale(domain=[0, 14000]), axis=alt.Axis(labelAngle=-45)),
+            y=alt.Y('Stroke Rate:Q', title='Stroke Rate (spm)', scale=alt.Scale(domain=[10, 35])),
+            tooltip=alt.Tooltip('Stroke Rate:Q', title='Stroke Rate (spm)'),
+            color=alt.condition(multi, 'file_name:N', alt.value('lightgray')),
+            detail='group:N'
+        )
+        .properties(width=1200, height=250)
+        .facet(row=alt.Row('dir:N', title="Direction"))
     )
 
-    length = alt.Chart(data).mark_bar(size=30).encode(
-        y=alt.Y('file_name:N', title='File Name', sort='-y'),  # Sort by distance
-        x=alt.X('max(Distance (GPS)):Q', title='Distance (m)', scale=alt.Scale(zero=True)),  
-        color=alt.Color('file_name:N', legend=None, scale=alt.Scale(scheme='tableau20')),  
-        tooltip=['file_name:N', 'max(Distance (GPS)):Q']  # Add tooltips
-    ).add_params(
-        multi
-    ).properties(
-        width=1200,
-        height=400,
-        title="Max GPS Distance by File"
+    # Bar chart for maximum GPS distance by file
+    bar_chart = (
+        alt.Chart(data)
+        .mark_bar(size=30)
+        .encode(
+            y=alt.Y('file_name:N', title='File Name', sort='-y'),
+            x=alt.X('max(Distance (GPS)):Q', title='Distance (m)', scale=alt.Scale(zero=True)),
+            color=alt.Color('file_name:N', legend=None, scale=alt.Scale(scheme='tableau20')),
+            tooltip=[alt.Tooltip('file_name:N', title='File Name'), alt.Tooltip('max(Distance (GPS)):Q', title='Max GPS Distance (m)')]
+        )
+        .add_params(multi)
+        .properties(width=1200, height=400, title="Max GPS Distance by File")
     )
 
-    (chart & length).save('index.html', embed_options={'renderer':'svg'})
+    # Save the composed chart as an HTML file with SVG renderer embedded
+    (line_chart & bar_chart).save('index.html', embed_options={'renderer': 'svg'})
+    logging.info("Visualization saved to 'index.html'")
 
- 
-def main():
-    # Interval,     Distance (GPS),     Distance (IMP),     Elapsed Time,Split (GPS),Speed (GPS),Split (IMP),Speed (IMP),Stroke Rate,Total Strokes,Distance/Stroke (GPS),Distance/Stroke (IMP),Heart Rate,Power,Catch,Slip,Finish,Wash,Force Avg,Work,Force Max,Max Force Angle,GPS Lat.,GPS Lon.
-    # (Interval),   (Meters),           (Meters),           (HH:MM:SS.tenths),(/500),(M/S),(/500),(M/S),(SPM),(Strokes),(Meters),(Meters),(BPM),(Watts),(Degrees),(Degrees),(Degrees),(Degrees),(Newtons),(Joules),(Newtons),(Degrees),(Degrees),(Degrees)
-    
-    # get a list of all files in csv-samples
-    files = ['csv-samples/' + f for f in os.listdir('csv-samples') if f.endswith('.csv')]
 
-    # create a dataset of all files in csv-samples, by indexing the dir
-    data = create_joined_dataset(files)
-    draw(data)
+def main() -> None:
+    """
+    Main function that aggregates CSV files from the 'csv-samples' directory,
+    processes them, and generates visualizations.
+    """
+    directory = 'csv-samples'
+    try:
+        files = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith('.csv')]
+    except FileNotFoundError:
+        logging.error(f"Directory '{directory}' not found.")
+        return
 
- 
+    if not files:
+        logging.error("No CSV files found in the specified directory.")
+        return
+
+    try:
+        data = create_joined_dataset(files)
+        draw(data)
+    except Exception as e:
+        logging.error(f"An error occurred during processing: {e}")
+
+
 if __name__ == '__main__':
     main()
