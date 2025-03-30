@@ -24,9 +24,14 @@ A Python tool for processing and visualizing rowing stroke data from CSV files. 
 2. Download or clone this repository:
    ```sh
    git clone https://github.com/derdilla/rowstats.git
-   cd stroke-data-analyzer
+   cd rowstats
    ```
-3. Install dependencies:
+3. Launch a venv
+   ```sh
+   python -m venv venv
+   source venv/bin/activate
+   ```
+4. Install dependencies:
    ```sh
    pip install -r requirements.txt
    ```
