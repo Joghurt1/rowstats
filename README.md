@@ -23,7 +23,7 @@ A Python tool for processing and visualizing rowing stroke data from CSV files. 
 1. Install [Python](https://www.python.org/) (version 3.8 or later).  
 2. Download or clone this repository:
    ```sh
-   git clone https://github.com/yourusername/stroke-data-analyzer.git
+   git clone https://github.com/derdilla/rowstats.git
    cd stroke-data-analyzer
    ```
 3. Install dependencies:
