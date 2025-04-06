@@ -218,7 +218,9 @@ def draw(data: pd.DataFrame) -> None:
             detail='group:N'
         )
         .properties(width=1200, height=250)
+        #.facet(row=alt.Row('dir:N', title="Direction"))
     )
+ 
 
     # Bar chart for maximum GPS distance by file
     bar_chart = (
