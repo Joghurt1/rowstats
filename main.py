@@ -8,6 +8,8 @@ import altair as alt
 import numpy as np
 import pandas as pd
 
+SKIP_SPLIT=True
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -42,7 +44,7 @@ def get_table(file_path: str) -> pd.DataFrame:
         df = pd.read_csv(StringIO(csv_content))
 
         # Remove data that is never read
-        df = df.drop(columns=['Power','Catch','Slip','Finish','Wash','Work', "Distance (IMP)", "Split (IMP)", "Speed (IMP)", "Distance/Stroke (IMP)", "Heart Rate", "Force Avg", "Force Max", "Max Force Angle", "GPS Lat.", "GPS Lon."])
+        # df = df.drop(columns=['Power','Catch','Slip','Finish','Wash','Work', "Distance (IMP)", "Split (IMP)", "Speed (IMP)", "Distance/Stroke (IMP)", "Heart Rate", "Force Avg", "Force Max", "Max Force Angle", "GPS Lat.", "GPS Lon."])
 
         return df
     except Exception as e:
@@ -63,6 +65,9 @@ def split_frames(df: pd.DataFrame) -> pd.DataFrame:
         A cleaned DataFrame with a new 'dir' column and numeric conversions.
     """
     logging.info(f"Splitting dataframes with {df.shape[0]} rows")
+    if SKIP_SPLIT:
+        logging.info("skipping...")
+        return df
 
     directions = []
     is_up = True
@@ -78,9 +83,10 @@ def split_frames(df: pd.DataFrame) -> pd.DataFrame:
             directions.append('turning')
             continue
 
-        if split_time.minute > 12 and not pending_transition:
+        split_detection_threshold = 8
+        if split_time.minute > split_detection_threshold and not pending_transition:
             pending_transition = True
-        elif split_time.minute <= 12 and pending_transition:
+        elif split_time.minute <= split_detection_threshold and pending_transition:
             if elements_since_transition >= 8:
                 is_up = not is_up
             elements_since_transition = 0
@@ -108,6 +114,16 @@ def split_frames(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def parse_times(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Converts split gps time column to minutes as int
+    """
+    splits = []
+    for idx, row in df.iterrows():
+       split_time = datetime.strptime(row['Split (GPS)'], '%H:%M:%S.%f')
+       splits.append(split_time.minute * 60 + split_time.second)
+    df['Split (GPS)'] = splits
+    return df
 
 def create_joined_dataset(file_names: List[str]) -> pd.DataFrame:
     """
@@ -155,9 +171,9 @@ def draw(data: pd.DataFrame) -> None:
     multi = alt.selection_point(fields=['file_name'])
 
     # Faceted line chart
-    line_chart = (
+    line_chart_rate = (
         alt.Chart(data)
-        .mark_line(strokeWidth=2)
+        .mark_line(strokeWidth=2, clip=True)
         .add_params(multi)
         .encode(
             x=alt.X('Distance (GPS):Q', title='Distance (m)', scale=alt.Scale(domain=[0, 14000]), axis=alt.Axis(labelAngle=-45)),
@@ -167,7 +183,35 @@ def draw(data: pd.DataFrame) -> None:
             detail='group:N'
         )
         .properties(width=1200, height=250)
-        .facet(row=alt.Row('dir:N', title="Direction"))
+        #.facet(row=alt.Row('dir:N', title="Direction"))
+    )
+
+    line_chart_split = (
+        alt.Chart(data)
+        .mark_line(strokeWidth=2, clip=True)
+        .add_params(multi)
+        .encode(
+            x=alt.X('Distance (GPS):Q', title='Distance (m)', scale=alt.Scale(domain=[0, 14000]), axis=alt.Axis(labelAngle=-45)),
+            y=alt.Y('Split (GPS):Q', title='Split (s)', scale=alt.Scale(domain=[60, 420])),
+            tooltip=alt.Tooltip('Split (GPS):Q', title='Split (s)'),
+            color=alt.condition(multi, 'file_name:N', alt.value('lightgray')),
+            detail='group:N'
+        )
+        .properties(width=1200, height=250)
+    )
+
+    line_chart_strokedist = (
+        alt.Chart(data)
+        .mark_line(strokeWidth=2, clip=True)
+        .add_params(multi)
+        .encode(
+            x=alt.X('Distance (GPS):Q', title='Distance (m)', scale=alt.Scale(domain=[0, 14000]), axis=alt.Axis(labelAngle=-45)),
+            y=alt.Y('Distance/Stroke (GPS):Q', title='Distance/Stroke (m)', scale=alt.Scale(domain=[0, 20])),
+            tooltip=alt.Tooltip('Distance/Stroke (GPS):Q', title='Distance/Stroke (m)'),
+            color=alt.condition(multi, 'file_name:N', alt.value('lightgray')),
+            detail='group:N'
+        )
+        .properties(width=1200, height=250)
     )
 
     # Bar chart for maximum GPS distance by file
@@ -185,7 +229,7 @@ def draw(data: pd.DataFrame) -> None:
     )
 
     # Save the composed chart as an HTML file with SVG renderer embedded
-    (line_chart & bar_chart).save('index.html', embed_options={'renderer': 'svg'})
+    (line_chart_rate & line_chart_split & line_chart_strokedist & bar_chart).save('index.html', embed_options={'renderer': 'svg'})
     logging.info("Visualization saved to 'index.html'")
 
 
@@ -207,6 +251,7 @@ def main() -> None:
 
     try:
         data = create_joined_dataset(files)
+        data = parse_times(data)
         draw(data)
     except Exception as e:
         logging.error(f"An error occurred during processing: {e}")
