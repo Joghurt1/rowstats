@@ -180,6 +180,7 @@ def draw(data: pd.DataFrame) -> None:
             y=alt.Y('Stroke Rate:Q', title='Stroke Rate (spm)', scale=alt.Scale(domain=[10, 35])),
             tooltip=alt.Tooltip('Stroke Rate:Q', title='Stroke Rate (spm)'),
             color=alt.condition(multi, 'file_name:N', alt.value('lightgray')),
+            opacity=alt.condition(multi, alt.value(1.0), alt.value(0.3)),
             detail='group:N'
         )
         .properties(width=1200, height=250)
@@ -192,9 +193,13 @@ def draw(data: pd.DataFrame) -> None:
         .add_params(multi)
         .encode(
             x=alt.X('Distance (GPS):Q', title='Distance (m)', scale=alt.Scale(domain=[0, 14000]), axis=alt.Axis(labelAngle=-45)),
-            y=alt.Y('Split (GPS):Q', title='Split (s)', scale=alt.Scale(domain=[60, 420])),
+            y=alt.Y('Split (GPS):Q', title='Split (s)', scale=alt.Scale(domain=[120, 400]), axis=alt.Axis(
+                format=".0f",
+                labelExpr="floor(datum.value / 60) + ':' + floor(datum.value % 60)"
+            )),
             tooltip=alt.Tooltip('Split (GPS):Q', title='Split (s)'),
             color=alt.condition(multi, 'file_name:N', alt.value('lightgray')),
+            opacity=alt.condition(multi, alt.value(1.0), alt.value(0.3)),
             detail='group:N'
         )
         .properties(width=1200, height=250)
@@ -209,6 +214,7 @@ def draw(data: pd.DataFrame) -> None:
             y=alt.Y('Distance/Stroke (GPS):Q', title='Distance/Stroke (m)', scale=alt.Scale(domain=[0, 20])),
             tooltip=alt.Tooltip('Distance/Stroke (GPS):Q', title='Distance/Stroke (m)'),
             color=alt.condition(multi, 'file_name:N', alt.value('lightgray')),
+            opacity=alt.condition(multi, alt.value(1.0), alt.value(0.3)),
             detail='group:N'
         )
         .properties(width=1200, height=250)
